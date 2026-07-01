@@ -31,7 +31,7 @@ export function ConnectScreen({ navigation }: Props) {
   const status = useMixerStore((s) => s.status);
   const detail = useMixerStore((s) => s.statusDetail);
 
-  const { mixers, scanning, error: scanError, scan } = useMixerDiscovery();
+  const { mixers, scanning, error: scanError, diag, scan } = useMixerDiscovery();
 
   // Demo fica desabilitado até buscar 3x sem encontrar a mesa.
   const [failedScans, setFailedScans] = useState(0);
@@ -171,6 +171,16 @@ export function ConnectScreen({ navigation }: Props) {
           <Text style={styles.hint}>Toque em buscar para encontrar mesas automaticamente.</Text>
         )}
 
+        {diag && !scanning && (
+          <Text style={styles.diag}>
+            Celular: {diag.localIp ?? '—'}
+            {diag.subnet ? ` · varreu ${diag.subnet}.1–254 (${diag.sweepCount} IPs)` : ''}
+            {`\n${diag.sent} pacotes enviados`}
+            {diag.sendErrors ? `, ${diag.sendErrors} falhas de envio` : ''}
+            {mixers.length === 0 ? '\nNenhuma mesa respondeu — confira se está no Wi-Fi da mesa.' : ''}
+          </Text>
+        )}
+
         {mixers.map((mixer) => (
           <Pressable key={mixer.ip} onPress={() => onPickMixer(mixer)} style={styles.mixerCard}>
             <View style={{ flex: 1 }}>
@@ -234,6 +244,13 @@ const styles = StyleSheet.create({
     fontFamily: family.monoRegular,
   },
   hint: { color: theme.textFaint, fontSize: font.caption, marginTop: space.sm, lineHeight: 18 },
+  diag: {
+    color: theme.textFaint,
+    fontSize: font.micro,
+    fontFamily: family.monoRegular,
+    marginTop: space.md,
+    lineHeight: 16,
+  },
   button: {
     backgroundColor: theme.accent,
     borderRadius: radius.md,

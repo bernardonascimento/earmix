@@ -39,7 +39,7 @@ export function ChannelStrip({ channel, onOpen, compact }: Props) {
       </Pressable>
 
       <View style={styles.faderRow}>
-        <Meter level={channel.on ? channel.meter : 0} />
+        <Meter level={channel.on ? channel.meter : 0} peak={channel.on ? channel.peak : 0} />
         <VerticalFader value={channel.level} onChange={(v) => setLevel(channel.index, v)} color={color} />
       </View>
 

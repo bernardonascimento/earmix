@@ -53,8 +53,10 @@ export interface ChannelState {
   pan: number;
   /** Send ligado para o bus selecionado (false = mutado NO MEU fone, não na PA). */
   on: boolean;
-  /** Nível de meter mais recente (0.0–1.0), para a barra de VU. */
+  /** Nível de meter suavizado (0.0–1.0), para a barra de VU (attack rápido, release lento). */
   meter: number;
+  /** Pico segurado (0.0–1.0), para o "risquinho" de peak-hold do VU. */
+  peak: number;
 }
 
 export interface BusState {
@@ -118,6 +120,7 @@ function defaultChannels(): ChannelState[] {
     pan: 0.5,
     on: true,
     meter: 0,
+    peak: 0,
   }));
 }
 
@@ -169,7 +172,8 @@ function startDemoMeters() {
       channels: s.channels.map((c) => {
         const active = c.on && c.level > 0.02;
         const target = active ? c.level * (0.45 + Math.random() * 0.6) - 0.05 : 0;
-        return { ...c, meter: Math.min(1, Math.max(0, target)) };
+        const meter = Math.min(1, Math.max(0, target));
+        return { ...c, meter, peak: meter >= c.peak ? meter : c.peak * 0.965 };
       }),
     }));
   }, 90);
@@ -231,6 +235,7 @@ export const useMixerStore = create<MixerState>((set, get) => ({
         pan: 0.5,
         on: true,
         meter: 0,
+        peak: 0,
       })),
       buses: DEMO_BUSES.map((name, i) => ({ index: i + 1, name })),
     });
@@ -370,8 +375,25 @@ x32.onMessage((msg) => {
   }
 });
 
+// Balística do VU (a mesa manda só o nível instantâneo a ~20 Hz; o app oficial
+// suaviza). Subida imediata; descida lenta; pico segurado e caindo bem devagar.
+const METER_RELEASE = 0.80; // fator de decaimento do nível por frame
+const PEAK_RELEASE = 0.965; // decaimento do peak-hold por frame (segura ~1s)
+
+function applyBallistics(prev: number, raw: number, release: number): number {
+  return raw >= prev ? raw : prev * release;
+}
+
 x32.onMeter((levels) => {
   useMixerStore.setState((s) => ({
-    channels: s.channels.map((c) => (c.index <= levels.length ? { ...c, meter: levels[c.index - 1] } : c)),
+    channels: s.channels.map((c) => {
+      if (c.index > levels.length) return c;
+      const raw = levels[c.index - 1] ?? 0;
+      return {
+        ...c,
+        meter: applyBallistics(c.meter, raw, METER_RELEASE),
+        peak: applyBallistics(c.peak, raw, PEAK_RELEASE),
+      };
+    }),
   }));
 });

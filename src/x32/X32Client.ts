@@ -11,7 +11,12 @@ const XREMOTE_INTERVAL_MS = 8000;
 /** Sem nenhuma resposta nesse intervalo, consideramos a conexão perdida. */
 const CONNECTION_TIMEOUT_MS = 6000;
 /** Renovação da subscription de meters (alias expira em ~10s). */
-const METER_RENEW_MS = 8000;
+const METER_RENEW_MS = 6000;
+/**
+ * time_factor da subscription de meters: intervalo = 50ms * tf. tf=1 → 50ms (20 Hz),
+ * fluido como o app oficial. Antes usávamos 5 (250ms/4 Hz) — VU travado.
+ */
+const METER_TIME_FACTOR = 1;
 /** Handshake: reenvia /info nesse intervalo até a mesa responder. */
 const HANDSHAKE_INTERVAL_MS = 800;
 /** Nº de sondagens /info sem resposta antes de declarar "não é uma mesa". */
@@ -63,7 +68,8 @@ export class X32Client {
   private statusListeners = new Set<StatusListener>();
   private meterListeners = new Set<MeterListener>();
 
-  private readonly meterAlias = 'earmix';
+  // Alias do /batchsubscribe: DEVE começar com '/' — vira o endereço OSC das respostas.
+  private readonly meterAlias = '/mtr';
 
   // ---------- assinaturas ----------
 
@@ -279,7 +285,7 @@ export class X32Client {
       // Forma 1: /subscribe simples — resposta chega em "/meters/1".
       this.send('/subscribe', [
         { type: 's', value: '/meters/1' },
-        { type: 'i', value: 5 },
+        { type: 'i', value: METER_TIME_FACTOR },
       ]);
       // Forma 2: /batchsubscribe com alias — resposta chega no próprio alias.
       this.send('/batchsubscribe', [
@@ -287,7 +293,7 @@ export class X32Client {
         { type: 's', value: '/meters/1' },
         { type: 'i', value: 0 },
         { type: 'i', value: 0 },
-        { type: 'i', value: 5 },
+        { type: 'i', value: METER_TIME_FACTOR },
       ]);
     };
     subscribe();
