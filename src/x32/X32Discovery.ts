@@ -1,45 +1,54 @@
 import dgram from 'react-native-udp';
 import { Buffer } from 'buffer';
 import { encode, decodePacket } from '../osc/osc';
-import { DiscoveredMixer, parseInfoReply, broadcastTargets, sweepTargets } from './discovery';
+import { DiscoveredMixer, parseInfoReply, sweepTargets } from './discovery';
 
 const X32_PORT = 10023;
-const DEFAULT_TIMEOUT_MS = 8000;
+const DEFAULT_TIMEOUT_MS = 9000;
 /**
- * O sweep unicast da /24 são ~253 IPs × 2 probes. Disparar tudo de uma vez estoura
- * o buffer de envio do socket no iPhone físico (ENOBUFS) e a maioria dos pacotes
- * nunca sai — a busca "roda" sem achar nada. Por isso enviamos em lotes espaçados.
+ * Varredura UNICAST da /24 em lotes pequenos e espaçados. Descoberta usa EXATAMENTE
+ * o mesmo caminho da conexão manual (que funciona no device): unicast + probe /info,
+ * SEM setBroadcast e SEM enviar para endereços de broadcast — no iOS o broadcast é
+ * bloqueado (sem entitlement de multicast) e ligar SO_BROADCAST parecia derrubar a
+ * recepção das respostas unicast. O IP da mesa vem do endereço de origem do pacote.
  */
-const SWEEP_BATCH_SIZE = 12;
-const SWEEP_BATCH_INTERVAL_MS = 25;
-/** Nº de passadas do sweep (a mesa pode perder o 1º pacote numa rajada). */
+const SWEEP_BATCH_SIZE = 8;
+const SWEEP_BATCH_INTERVAL_MS = 35;
+/** Nº de passadas do sweep (a mesa pode perder o 1º pacote). */
 const SWEEP_PASSES = 2;
+/**
+ * Após achar a primeira mesa, encerramos logo (sem varrer o resto) — mas damos uma
+ * folga para a resposta /xinfo chegar e trazer o nome real da mesa (em vez do genérico
+ * "osc-server" do /info).
+ */
+const FOUND_GRACE_MS = 700;
 
 /** Mesmo cast pontual usado no X32Client (Expo não traz os tipos do EventEmitter). */
 type UdpSocket = ReturnType<typeof dgram.createSocket> & {
   on(event: string, cb: (...args: any[]) => void): void;
   once(event: string, cb: (...args: any[]) => void): void;
-  setBroadcast(flag: boolean): void;
 };
 
 /** Diagnóstico da varredura — exibido na tela de busca para não ficarmos no escuro. */
 export interface DiscoveryDiag {
-  /** IP local detectado (base do sweep/broadcast). null = não detectado → sweep vazio. */
+  /** IP local detectado (base do sweep). null = não detectado → sweep vazio. */
   localIp: string | null;
   /** Prefixo /24 derivado (ex.: "192.168.1"). */
   subnet: string | null;
   /** Quantos hosts o sweep unicast cobre. */
   sweepCount: number;
-  /** Endereços de broadcast tentados. */
-  broadcast: string[];
-  /** Pacotes UDP enviados com sucesso e com erro (ENOBUFS etc.). */
+  /** Pacotes UDP enviados com sucesso e com erro. */
   sent: number;
   sendErrors: number;
 }
 
 export interface DiscoverOptions {
-  /** IP local do dispositivo, para derivar o broadcast /24 (ex.: via expo-network). */
+  /** IP base para derivar a sub-rede /24 a varrer (IP local real, ou o da mesa/campo). */
   localIp?: string | null;
+  /** IP REAL do dispositivo, para excluir a si mesmo do sweep (opcional). */
+  selfIp?: string | null;
+  /** Lista de IPs a sondar já pronta (tem prioridade sobre localIp — permite varrer N /24). */
+  targets?: string[];
   /** Quanto tempo aguardar respostas antes de finalizar. */
   timeoutMs?: number;
   /** Callback incremental conforme cada mesa responde. */
@@ -56,27 +65,30 @@ function subnetPrefix(ip: string | null | undefined): string | null {
 }
 
 /**
- * Descobre mesas X32/M32 na rede local. Combina broadcast /24 (OSC /xinfo — método
- * confiável quando a rede permite; bloqueado no iPhone sem entitlement de multicast)
- * com varredura UNICAST da sub-rede (funciona no device sem entitlement). Resolve com
- * a lista (deduplicada por IP) após o timeout.
+ * Descobre mesas X32/M32 na rede local por varredura UNICAST da sub-rede /24, usando
+ * o mesmo caminho da conexão manual (probe /info na porta 10023). Resolve com a lista
+ * (deduplicada por IP) após o timeout.
  */
 export function discoverMixers(opts: DiscoverOptions = {}): Promise<DiscoveredMixer[]> {
-  const { localIp, timeoutMs = DEFAULT_TIMEOUT_MS, onFound, onDiag } = opts;
+  const { localIp, selfIp, targets, timeoutMs = DEFAULT_TIMEOUT_MS, onFound, onDiag } = opts;
 
   return new Promise((resolve, reject) => {
     const socket = dgram.createSocket({ type: 'udp4' }) as UdpSocket;
     const found = new Map<string, DiscoveredMixer>();
     let settled = false;
     let batchTimer: ReturnType<typeof setInterval> | null = null;
+    let foundTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const sweep = sweepTargets(localIp);
-    const broadcast = broadcastTargets(localIp);
+    // Lista pronta (uma ou várias /24) tem prioridade; senão deriva de localIp.
+    // selfIp null = base estimada (ex.: IP da mesa): NÃO exclui ninguém do sweep.
+    const sweep =
+      targets && targets.length
+        ? targets
+        : sweepTargets(localIp, selfIp === undefined ? localIp : selfIp);
     const diag: DiscoveryDiag = {
       localIp: localIp ?? null,
       subnet: subnetPrefix(localIp),
       sweepCount: sweep.length,
-      broadcast,
       sent: 0,
       sendErrors: 0,
     };
@@ -92,6 +104,7 @@ export function discoverMixers(opts: DiscoverOptions = {}): Promise<DiscoveredMi
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (foundTimer) clearTimeout(foundTimer);
       stopBatch();
       try {
         socket.close();
@@ -117,6 +130,16 @@ export function discoverMixers(opts: DiscoverOptions = {}): Promise<DiscoveredMi
       reject(err);
     });
 
+    const xinfo = encode('/xinfo');
+    const info = encode('/info');
+    const sendProbe = (target: string, probe: Buffer) => {
+      socket.send(probe, 0, probe.length, X32_PORT, target, (err?: Error) => {
+        // Falha isolada (ex.: EHOSTUNREACH de IP inexistente) não aborta os demais.
+        if (err) diag.sendErrors++;
+        else diag.sent++;
+      });
+    };
+
     socket.on('message', (data: Buffer | Uint8Array, rinfo: { address: string }) => {
       let messages;
       try {
@@ -126,7 +149,20 @@ export function discoverMixers(opts: DiscoverOptions = {}): Promise<DiscoveredMi
       }
       for (const msg of messages) {
         const mixer = parseInfoReply(msg, rinfo?.address ?? '');
-        if (mixer && mixer.ip && !found.has(mixer.ip)) {
+        if (!mixer || !mixer.ip) continue;
+        // /info devolve nome genérico "osc-server"; enquanto o /xinfo (nome real) não
+        // chega, mostramos o modelo em vez do genérico.
+        if (!mixer.name || mixer.name === 'osc-server') mixer.name = mixer.model || 'Mesa';
+        const known = found.get(mixer.ip);
+        if (!known) {
+          found.set(mixer.ip, mixer);
+          onFound?.(mixer);
+          // Achou uma mesa: encerra logo, dando uma folga para o /xinfo trazer o nome real.
+          if (!foundTimer) foundTimer = setTimeout(finish, FOUND_GRACE_MS);
+          // /info dá nome genérico; pede /xinfo ao MESMO IP para o nome real (unicast).
+          if (msg.address === '/info') sendProbe(mixer.ip, xinfo);
+        } else if (msg.address === '/xinfo') {
+          // /xinfo traz o nome real da mesa — atualiza o registro.
           found.set(mixer.ip, mixer);
           onFound?.(mixer);
         }
@@ -134,31 +170,10 @@ export function discoverMixers(opts: DiscoverOptions = {}): Promise<DiscoveredMi
     });
 
     socket.once('listening', () => {
-      try {
-        socket.setBroadcast(true);
-      } catch {
-        /* alguns ambientes não permitem; segue mesmo assim */
-      }
-      // /xinfo é o comando de descoberta (resposta traz o IP da mesa); /info é o mesmo
-      // usado na conexão manual. Mandamos os dois para cobrir ambos os caminhos.
-      const probes = [encode('/xinfo'), encode('/info')];
-      const send = (target: string) => {
-        for (const probe of probes) {
-          socket.send(probe, 0, probe.length, X32_PORT, target, (err?: Error) => {
-            // Falha em um alvo isolado não aborta os demais — só contabiliza.
-            if (err) diag.sendErrors++;
-            else diag.sent++;
-          });
-        }
-      };
+      onDiag?.(diag); // a UI já mostra IP/sub-rede enquanto varre
 
-      // Broadcast: poucos alvos, vai de uma vez (só funciona em redes/ambientes permissivos).
-      broadcast.forEach(send);
-      // Reporta os alvos logo no início (a UI já mostra IP/sub-rede enquanto varre).
-      onDiag?.(diag);
-
-      // Varredura UNICAST em lotes espaçados (não estoura o buffer do socket no device),
-      // repetida SWEEP_PASSES vezes (a mesa pode perder o 1º pacote numa rajada).
+      // Varredura UNICAST GENTIL com /info (o mesmo probe da conexão manual, que
+      // funciona no device), em lotes espaçados, repetida SWEEP_PASSES vezes.
       let i = 0;
       let pass = 1;
       batchTimer = setInterval(() => {
@@ -167,12 +182,11 @@ export function discoverMixers(opts: DiscoverOptions = {}): Promise<DiscoveredMi
           return;
         }
         const end = Math.min(i + SWEEP_BATCH_SIZE, sweep.length);
-        for (; i < end; i++) send(sweep[i]);
+        for (; i < end; i++) sendProbe(sweep[i], info);
         if (i >= sweep.length) {
           if (pass < SWEEP_PASSES) {
             pass++;
             i = 0;
-            broadcast.forEach(send); // reforça o broadcast a cada passada
           } else {
             stopBatch();
           }

@@ -10,12 +10,15 @@ import {
   ActivityIndicator,
   Image,
   ScrollView,
+  useWindowDimensions,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useMixerStore, loadPersistedHost } from '../store/useMixerStore';
 import { useMixerDiscovery } from '../x32/useMixerDiscovery';
+import { PasswordPrompt } from '../components/PasswordPrompt';
 import { DiscoveredMixer } from '../x32/discovery';
 import { theme, space, radius, font, family } from '../theme';
 import { RootStackParamList } from '../navigation';
@@ -23,19 +26,58 @@ import { RootStackParamList } from '../navigation';
 type Props = NativeStackScreenProps<RootStackParamList, 'Connect'>;
 
 const IP_RE = /^(\d{1,3}\.){3}\d{1,3}$/;
+/**
+ * Senha do modo admin (libera o Main LR / PA). É um controle de acesso CASUAL — fica
+ * no bundle, não é criptográfico. Troque aqui o valor conforme combinar com o time.
+ */
+const ADMIN_PASSWORD = 'monitor@admin';
 
 export function ConnectScreen({ navigation }: Props) {
-  const [host, setHost] = useState('192.168.1.200'); // IP da mesa (pré-preenchido)
+  const [host, setHost] = useState('192.168.0.'); // prefixo comum; o usuário completa
   const connect = useMixerStore((s) => s.connect);
   const startDemo = useMixerStore((s) => s.startDemo);
   const status = useMixerStore((s) => s.status);
   const detail = useMixerStore((s) => s.statusDetail);
 
-  const { mixers, scanning, error: scanError, diag, scan } = useMixerDiscovery();
+  const { mixers, scanning, error: scanError, scan } = useMixerDiscovery();
 
-  // Demo fica desabilitado até buscar 3x sem encontrar a mesa.
-  const [failedScans, setFailedScans] = useState(0);
-  const demoEnabled = failedScans >= 3;
+  const isAdmin = useMixerStore((s) => s.isAdmin);
+  const setAdmin = useMixerStore((s) => s.setAdmin);
+
+  // Em telas largas (iPad) dá margem lateral generosa para os botões não esticarem.
+  const { width } = useWindowDimensions();
+  const sidePad = width >= 700 ? Math.min(width * 0.2, 240) : space.xl;
+
+  // iOS tem prompt nativo (Alert.prompt); Android não → usamos um modal próprio só nele.
+  const [adminPrompt, setAdminPrompt] = useState(false);
+  const onAdminTap = () => {
+    if (isAdmin) {
+      Alert.alert('Modo admin', 'Sair do modo admin?', [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Sair', style: 'destructive', onPress: () => setAdmin(false) },
+      ]);
+      return;
+    }
+    if (Platform.OS === 'ios') {
+      Alert.prompt(
+        'Modo admin',
+        'Digite a senha para liberar o Main LR (mix da casa).',
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          { text: 'Entrar', onPress: (senha?: string) => onAdminSubmit(senha ?? '') },
+        ],
+        'secure-text',
+      );
+    } else {
+      setAdminPrompt(true);
+    }
+  };
+
+  const onAdminSubmit = (senha: string) => {
+    setAdminPrompt(false);
+    if (senha === ADMIN_PASSWORD) setAdmin(true);
+    else Alert.alert('Senha incorreta');
+  };
 
   // Há uma tentativa de conexão em andamento aguardando validação (handshake).
   // Só navegamos para o Mixer quando a mesa é confirmada; erro mantém na tela.
@@ -44,8 +86,8 @@ export function ConnectScreen({ navigation }: Props) {
   const [autoReconnecting, setAutoReconnecting] = useState(false);
 
   const onScan = async () => {
-    const found = await scan();
-    setFailedScans((n) => (found.length > 0 ? 0 : n + 1));
+    // Passa o IP do campo como pista da sub-rede caso o iPad não exponha o IP local.
+    await scan(host.trim());
   };
 
   const valid = IP_RE.test(host.trim());
@@ -106,7 +148,7 @@ export function ConnectScreen({ navigation }: Props) {
         style={styles.flex}
       >
         <ScrollView
-          contentContainerStyle={styles.container}
+          contentContainerStyle={[styles.container, { paddingHorizontal: sidePad }]}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
           bounces={false}
@@ -171,16 +213,6 @@ export function ConnectScreen({ navigation }: Props) {
           <Text style={styles.hint}>Toque em buscar para encontrar mesas automaticamente.</Text>
         )}
 
-        {diag && !scanning && (
-          <Text style={styles.diag}>
-            Celular: {diag.localIp ?? '—'}
-            {diag.subnet ? ` · varreu ${diag.subnet}.1–254 (${diag.sweepCount} IPs)` : ''}
-            {`\n${diag.sent} pacotes enviados`}
-            {diag.sendErrors ? `, ${diag.sendErrors} falhas de envio` : ''}
-            {mixers.length === 0 ? '\nNenhuma mesa respondeu — confira se está no Wi-Fi da mesa.' : ''}
-          </Text>
-        )}
-
         {mixers.map((mixer) => (
           <Pressable key={mixer.ip} onPress={() => onPickMixer(mixer)} style={styles.mixerCard}>
             <View style={{ flex: 1 }}>
@@ -202,18 +234,36 @@ export function ConnectScreen({ navigation }: Props) {
           <Text style={styles.status}>Conectado ✓ {detail ? `· ${detail}` : ''}</Text>
         )}
 
-          <Pressable
-            onPress={onDemo}
-            disabled={!demoEnabled}
-            style={[styles.demoButton, !demoEnabled && styles.demoButtonDisabled]}
-          >
-            <Ionicons name="headset-outline" size={18} color={demoEnabled ? theme.textDim : theme.textFaint} />
-            <Text style={[styles.demoButtonText, !demoEnabled && styles.demoButtonTextDisabled]}>
-              Entrar no modo demo
-            </Text>
-          </Pressable>
+          <View style={styles.bottomRow}>
+            <Pressable onPress={onDemo} style={[styles.bottomBtn, styles.bottomBtnDisabled]}>
+              <Ionicons name="headset-outline" size={18} color={theme.textFaint} />
+              <Text style={[styles.bottomBtnText, styles.bottomBtnTextDim]}>Modo demo</Text>
+            </Pressable>
+
+            <Pressable
+              onPress={onAdminTap}
+              style={[styles.bottomBtn, isAdmin ? styles.adminBtnOn : styles.bottomBtnDisabled]}
+            >
+              <Ionicons
+                name={isAdmin ? 'lock-open' : 'lock-closed'}
+                size={18}
+                color={isAdmin ? theme.accent : theme.textFaint}
+              />
+              <Text style={[styles.bottomBtnText, isAdmin ? styles.adminBtnTextOn : styles.bottomBtnTextDim]}>
+                {isAdmin ? 'Admin' : 'Modo admin'}
+              </Text>
+            </Pressable>
+          </View>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* Prompt de senha do admin no Android (no iOS usamos o Alert.prompt nativo). */}
+      <PasswordPrompt
+        visible={adminPrompt}
+        message="Digite a senha para liberar o Main LR (mix da casa)."
+        onCancel={() => setAdminPrompt(false)}
+        onSubmit={onAdminSubmit}
+      />
     </SafeAreaView>
   );
 }
@@ -244,13 +294,6 @@ const styles = StyleSheet.create({
     fontFamily: family.monoRegular,
   },
   hint: { color: theme.textFaint, fontSize: font.caption, marginTop: space.sm, lineHeight: 18 },
-  diag: {
-    color: theme.textFaint,
-    fontSize: font.micro,
-    fontFamily: family.monoRegular,
-    marginTop: space.md,
-    lineHeight: 16,
-  },
   button: {
     backgroundColor: theme.accent,
     borderRadius: radius.md,
@@ -291,8 +334,9 @@ const styles = StyleSheet.create({
   mixerName: { color: theme.text, fontSize: font.body, fontWeight: '600' },
   mixerMeta: { color: theme.textDim, fontSize: font.caption, marginTop: 2 },
   mixerArrow: { color: theme.accent, fontSize: 28, fontWeight: '300' },
-  demoButton: {
-    marginTop: space.xl + space.xs,
+  bottomRow: { flexDirection: 'row', gap: space.sm, marginTop: space.xl + space.xs },
+  bottomBtn: {
+    flex: 1, // 50% cada
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -302,7 +346,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.border,
   },
-  demoButtonText: { color: theme.text, fontSize: font.label, fontWeight: '600' },
-  demoButtonDisabled: { opacity: 0.4 },
-  demoButtonTextDisabled: { color: theme.textFaint },
+  bottomBtnDisabled: { opacity: 0.4 },
+  bottomBtnText: { color: theme.text, fontSize: font.label, fontWeight: '600' },
+  bottomBtnTextDim: { color: theme.textFaint },
+  adminBtnOn: { borderColor: theme.accent, backgroundColor: theme.accentDim },
+  adminBtnTextOn: { color: theme.text },
 });

@@ -82,7 +82,10 @@ function svg({ bg, scale = 1 }) {
       </linearGradient>
     </defs>`;
   const background = bg ? `<rect width="1024" height="1024" fill="url(#bg)"/>` : '';
-  const mark = `<g transform="translate(512,512) scale(${scale}) translate(-512,-512)">${headset()}${faders()}</g>`;
+  // Centro vertical REAL da marca (headset arco ~121 .. faders 792). Centralizamos a
+  // marca no canvas (senão fica alta, deixando mais preto embaixo) e escalamos daí.
+  const MARK_CY = 456;
+  const mark = `<g transform="translate(512,512) scale(${scale}) translate(-512,${-MARK_CY})">${headset()}${faders()}</g>`;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">${defs}${background}${mark}</svg>`;
 }
 
@@ -91,19 +94,45 @@ async function render(svgStr, size, out) {
   console.log('✔', out, `${size}x${size}`);
 }
 
+/** Só o fundo em gradiente (para compor a marca por cima, centralizada). */
+function bgOnly() {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+    <defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="${BG_TOP}"/><stop offset="1" stop-color="${BG_BOT}"/>
+    </linearGradient></defs><rect width="1024" height="1024" fill="url(#bg)"/></svg>`;
+}
+
+/**
+ * Gera um ícone com a marca RECORTADA (trim) e composta no CENTRO exato do canvas —
+ * garante bordas iguais em cima/embaixo. `fraction` = altura da marca / tamanho do ícone.
+ */
+async function renderCentered(size, out, { bg, fraction }) {
+  const markTrim = await sharp(Buffer.from(svg({ bg: false, scale: 1 }))).trim().toBuffer();
+  const mark = await sharp(markTrim)
+    .resize({ height: Math.round(size * fraction), fit: 'inside' })
+    .png()
+    .toBuffer();
+  const base = bg
+    ? sharp(Buffer.from(bgOnly())).resize(size, size)
+    : sharp({ create: { width: size, height: size, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } });
+  await base.composite([{ input: mark, gravity: 'center' }]).png().toFile(join(ASSETS, out));
+  console.log('✔', out, `${size} (centrado, ${Math.round(fraction * 100)}%)`);
+}
+
 const tasks = [
-  // App icon (iOS/loja): fundo cheio + marca.
-  [svg({ bg: true, scale: 1 }), 1024, 'icon.png'],
   // Splash: marca sobre transparente (a tela é preta no app.json).
   [svg({ bg: false, scale: 0.8 }), 1024, 'splash-icon.png'],
-  // Android adaptive foreground: marca menor (zona segura ~66%).
-  [svg({ bg: false, scale: 0.62 }), 1024, 'android-icon-foreground.png'],
-  [svg({ bg: false, scale: 0.62 }), 1024, 'android-icon-monochrome.png'],
-  // Favicon (web).
-  [svg({ bg: true, scale: 1 }), 64, 'favicon.png'],
 ];
 
 for (const [s, size, out] of tasks) await render(s, size, out);
+
+// Ícones com a marca RECORTADA e centralizada (bordas iguais em cima/embaixo):
+// App icon iOS (fundo + marca ~72% da altura).
+await renderCentered(1024, 'icon.png', { bg: true, fraction: 0.72 });
+await renderCentered(64, 'favicon.png', { bg: true, fraction: 0.72 });
+// Android adaptive foreground/monochrome (~66% = dentro da zona segura do adaptive icon).
+await renderCentered(1024, 'android-icon-foreground.png', { bg: false, fraction: 0.66 });
+await renderCentered(1024, 'android-icon-monochrome.png', { bg: false, fraction: 0.66 });
 
 // Logo in-app: recortado (trim) na marca, sem padding transparente, para o
 // espaçamento até o texto ser controlado pelo layout (não pela margem da imagem).

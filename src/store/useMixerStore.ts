@@ -9,6 +9,21 @@ import { DEMO_CHANNELS, DEMO_BUSES, makeBusSends, DemoSend } from '../demo/demoD
 const SELECTED_BUS_KEY = 'earmix.selectedBus';
 /** Chave do IP da última mesa validada — para auto-reconectar ao reabrir o app. */
 const HOST_KEY = 'earmix.host';
+/** Chave do modo admin (acesso ao Main LR / PA). */
+const ADMIN_KEY = 'earmix.admin';
+
+function persistAdmin(on: boolean) {
+  AsyncStorage.setItem(ADMIN_KEY, on ? '1' : '0').catch(() => {});
+}
+
+/** Modo admin salvo (persistido — o admin fica lembrado entre sessões). */
+export async function loadPersistedAdmin(): Promise<boolean> {
+  try {
+    return (await AsyncStorage.getItem(ADMIN_KEY)) === '1';
+  } catch {
+    return false;
+  }
+}
 
 function persistBus(bus: number) {
   AsyncStorage.setItem(SELECTED_BUS_KEY, String(bus)).catch(() => {});
@@ -53,15 +68,15 @@ export interface ChannelState {
   pan: number;
   /** Send ligado para o bus selecionado (false = mutado NO MEU fone, não na PA). */
   on: boolean;
-  /** Nível de meter suavizado (0.0–1.0), para a barra de VU (attack rápido, release lento). */
+  /** Nível de meter suavizado (0.0–1.0): sobe na hora, desce suave (como o VU da mesa). */
   meter: number;
-  /** Pico segurado (0.0–1.0), para o "risquinho" de peak-hold do VU. */
-  peak: number;
 }
 
 export interface BusState {
   index: number;
   name: string;
+  /** Cor do bus na mesa (código 0–15 da X32). 0 = sem cor. */
+  color: number;
 }
 
 interface MixerState {
@@ -76,6 +91,15 @@ interface MixerState {
   selectedBus: number; // 1-based
   /** Volume master do bus de retorno selecionado (0.0–1.0). */
   master: number;
+  /** Bus de retorno ligado? false = o próprio fone mutado (não afeta a PA). */
+  masterOn: boolean;
+
+  /** Modo administrador: libera o Main LR (mix da PA). Persistido. */
+  isAdmin: boolean;
+  /** Estamos controlando o Main LR (PA) em vez de um bus de fone? */
+  mainSelected: boolean;
+  /** Nome/cor do Main LR na mesa. */
+  main: { name: string; color: number };
 
   // ações de conexão
   connect: (host: string) => void;
@@ -87,6 +111,12 @@ interface MixerState {
 
   // ação de seleção de bus
   selectBus: (bus: number) => void;
+  /** Entra no modo Main LR (mix da PA). No-op se não for admin. */
+  selectMain: () => void;
+  /** Liga/desliga o modo admin (após validar a senha na tela inicial). */
+  setAdmin: (on: boolean) => void;
+  /** Pausa/retoma o fluxo de VU (chamado quando um modal abre/fecha). */
+  pauseMeters: (paused: boolean) => void;
 
   // ações de mixagem (otimistas + envio à mesa)
   setLevel: (channel: number, level: number) => void;
@@ -95,6 +125,8 @@ interface MixerState {
   toggleMute: (channel: number) => void;
   /** Define o volume master do retorno atual. */
   setMaster: (value: number) => void;
+  /** Liga/desliga o bus de retorno inteiro (mute do próprio fone). */
+  toggleMasterMute: () => void;
 
   /** Aplica um snapshot de preset (level/pan/on por canal) ao bus atual. */
   applySnapshot: (snapshot: PresetSnapshot) => void;
@@ -120,7 +152,6 @@ function defaultChannels(): ChannelState[] {
     pan: 0.5,
     on: true,
     meter: 0,
-    peak: 0,
   }));
 }
 
@@ -128,6 +159,7 @@ function defaultBuses(): BusState[] {
   return Array.from({ length: BUS_COUNT }, (_, i) => ({
     index: i + 1,
     name: `Bus ${i + 1}`,
+    color: 0,
   }));
 }
 
@@ -141,6 +173,23 @@ function updateChannel(channel: number, patch: Partial<ChannelState>) {
 let demoSends: Record<number, DemoSend[]> = {};
 let demoMasters: Record<number, number> = {};
 let demoMeterTimer: ReturnType<typeof setInterval> | null = null;
+/** Envelope de "áudio" simulado por canal (0..1): sobe em transientes e decai. */
+let demoEnv: Record<number, number> = {};
+/**
+ * Pausa o fluxo de VU (demo e real) enquanto um modal/bottom sheet está aberto. O VU
+ * atualiza o store a ~20 Hz; abrir um sheet no meio disso disparava um loop de
+ * re-render ("Maximum update depth"). Com o sheet aberto o VU nem aparece, então parar
+ * o setState é seguro e mata o gatilho do crash. É uma flag simples (não-reativa).
+ */
+let metersPaused = false;
+
+// Balística do VU: a mesa manda só o nível instantâneo a ~20 Hz. Sobe na hora,
+// desce suave — sem peak-hold (nada de "prender" LED), igual ao medidor da mesa.
+const METER_RELEASE = 0.78; // fator de decaimento por frame (queda natural, ~sem degrau)
+
+function applyBallistics(prev: number, raw: number): number {
+  return raw >= prev ? raw : prev * METER_RELEASE;
+}
 
 /** Carrega o mix fictício do bus indicado nos canais (preserva mute/nome/cor). */
 function loadDemoBus(bus: number) {
@@ -164,19 +213,38 @@ function saveDemoBus(bus: number) {
   demoMasters[bus] = s.master;
 }
 
-/** Anima as barras de VU de forma plausível enquanto o demo está ativo. */
+/**
+ * Anima as barras de VU no demo com cara de áudio de verdade: cada canal mantém um
+ * envelope que recebe "transientes" (picos) em ritmos diferentes e decai entre eles,
+ * em vez de sortear um valor cheio a cada frame. Roda a 20 Hz como os meters reais.
+ */
 function startDemoMeters() {
   stopDemoMeters();
+  demoEnv = {};
   demoMeterTimer = setInterval(() => {
+    if (metersPaused) return; // sheet aberto: não atualiza o VU (evita loop de render)
     useMixerStore.setState((s) => ({
       channels: s.channels.map((c) => {
         const active = c.on && c.level > 0.02;
-        const target = active ? c.level * (0.45 + Math.random() * 0.6) - 0.05 : 0;
-        const meter = Math.min(1, Math.max(0, target));
-        return { ...c, meter, peak: meter >= c.peak ? meter : c.peak * 0.965 };
+        let env = demoEnv[c.index] ?? 0;
+        if (!active) {
+          env *= 0.6; // sem sinal: cai rápido para o silêncio
+        } else {
+          // Ritmo de transientes varia por canal (uns "batem" mais que outros).
+          const hitRate = 0.1 + ((c.index * 7) % 5) * 0.045;
+          if (Math.random() < hitRate) {
+            // Novo transiente proporcional ao fader, com dinâmica (às vezes forte).
+            const hit = c.level * (0.5 + Math.random() * 0.55);
+            env = Math.max(env, Math.min(1, hit));
+          } else {
+            env *= 0.86; // decaimento natural entre transientes
+          }
+        }
+        demoEnv[c.index] = env;
+        return { ...c, meter: Math.min(1, Math.max(0, env)) };
       }),
     }));
-  }, 90);
+  }, 50);
 }
 
 function stopDemoMeters() {
@@ -194,6 +262,10 @@ export const useMixerStore = create<MixerState>((set, get) => ({
   buses: defaultBuses(),
   selectedBus: 1,
   master: 0.75,
+  masterOn: true,
+  isAdmin: false,
+  mainSelected: false,
+  main: { name: 'Main LR', color: 0 },
 
   connect: (host) => {
     stopDemoMeters();
@@ -235,9 +307,9 @@ export const useMixerStore = create<MixerState>((set, get) => ({
         pan: 0.5,
         on: true,
         meter: 0,
-        peak: 0,
       })),
-      buses: DEMO_BUSES.map((name, i) => ({ index: i + 1, name })),
+      // Cores variadas (1–7 da paleta X32) para o demo parecer uma mesa configurada.
+      buses: DEMO_BUSES.map((name, i) => ({ index: i + 1, name, color: (i % 7) + 1 })),
     });
     loadDemoBus(bus);
     startDemoMeters();
@@ -247,40 +319,78 @@ export const useMixerStore = create<MixerState>((set, get) => ({
     persistBus(bus); // lembra o bus do músico entre sessões
     if (get().demoMode) {
       saveDemoBus(get().selectedBus); // preserva o mix do bus anterior
-      set({ selectedBus: bus });
+      set({ selectedBus: bus, mainSelected: false });
       loadDemoBus(bus);
       return;
     }
-    set({ selectedBus: bus });
-    // Zera os sends locais e pede os valores reais do novo bus.
+    // Zera os sends locais (masterOn otimista ligado) e pede os valores reais do bus.
     set((s) => ({
+      selectedBus: bus,
+      mainSelected: false,
+      masterOn: true,
       channels: s.channels.map((c) => ({ ...c, level: 0, pan: 0.5, on: true })),
     }));
     if (get().status === 'connected') x32.requestBusSends(bus);
   },
 
+  selectMain: () => {
+    if (!get().isAdmin) return;
+    // Entra no mix da PA: zera local e pede os faders/mutes PRINCIPAIS + Main LR.
+    set((s) => ({
+      mainSelected: true,
+      masterOn: true,
+      channels: s.channels.map((c) => ({ ...c, level: 0, pan: 0.5, on: true })),
+    }));
+    if (get().status === 'connected') x32.requestMainSends();
+  },
+
+  pauseMeters: (paused) => {
+    metersPaused = paused;
+  },
+
+  setAdmin: (on) => {
+    persistAdmin(on);
+    set({ isAdmin: on });
+    // Perdeu o admin enquanto no Main LR: volta para o bus de fone.
+    if (!on && get().mainSelected) get().selectBus(get().selectedBus);
+  },
+
   setLevel: (channel, level) => {
     updateChannel(channel, { level });
-    x32.setSendLevel(channel, get().selectedBus, level);
+    // No Main LR (admin): fader PRINCIPAL do canal (PA). Senão: send para o bus de fone.
+    if (get().mainSelected) x32.setChannelFader(channel, level);
+    else x32.setSendLevel(channel, get().selectedBus, level);
   },
 
   setPan: (channel, pan) => {
     updateChannel(channel, { pan });
-    x32.setSendPan(channel, get().selectedBus, pan);
+    // No Main LR só mexemos em fader/mute; pan fica no send do bus de fone.
+    if (!get().mainSelected) x32.setSendPan(channel, get().selectedBus, pan);
   },
 
-  // "Mute" no fone = liga/desliga o send do canal para o bus selecionado.
-  // Não toca no mute principal do canal (não afeta a PA nem outros músicos).
+  // "Mute" do canal. No fone (bus): liga/desliga o SEND (não afeta a PA). No Main LR
+  // (admin): mute PRINCIPAL do canal — aí sim afeta a PA/todos.
   toggleMute: (channel) => {
     const ch = get().channels[channel - 1];
     const on = !ch.on;
     updateChannel(channel, { on });
-    x32.setSendOn(channel, get().selectedBus, on);
+    if (get().mainSelected) x32.setChannelOn(channel, on);
+    else x32.setSendOn(channel, get().selectedBus, on);
   },
 
   setMaster: (value) => {
     set({ master: Math.min(1, Math.max(0, value)) });
-    if (!get().demoMode) x32.setBusMaster(get().selectedBus, value);
+    if (get().demoMode) return;
+    if (get().mainSelected) x32.setMainFader(value);
+    else x32.setBusMaster(get().selectedBus, value);
+  },
+
+  toggleMasterMute: () => {
+    const on = !get().masterOn;
+    set({ masterOn: on });
+    if (get().demoMode) return;
+    if (get().mainSelected) x32.setMainOn(on);
+    else x32.setBusOn(get().selectedBus, on);
   },
 
   applySnapshot: (snapshot) => {
@@ -304,6 +414,10 @@ export const useMixerStore = create<MixerState>((set, get) => ({
 
 // Restaura o bus salvo assim que o app carrega (antes de conectar/entrar no demo).
 loadPersistedBus();
+// Restaura o modo admin salvo (o admin fica lembrado entre sessões).
+loadPersistedAdmin().then((admin) => {
+  if (admin) useMixerStore.setState({ isAdmin: true });
+});
 
 x32.onStatus((status, detail) => {
   useMixerStore.setState({ status, statusDetail: detail });
@@ -316,17 +430,18 @@ x32.onStatus((status, detail) => {
     // Mesa validada: lembra o IP para auto-reconectar ao reabrir o app.
     const host = useMixerStore.getState().host;
     if (host) persistHost(host);
-    // Popular o estado inicial assim que conectar (também re-popula o bus na reconexão).
+    // Popular o estado inicial assim que conectar (também re-popula na reconexão).
     x32.requestBusNames();
     x32.requestChannelMeta();
-    x32.requestBusSends(useMixerStore.getState().selectedBus);
+    if (useMixerStore.getState().mainSelected) x32.requestMainSends();
+    else x32.requestBusSends(useMixerStore.getState().selectedBus);
     x32.subscribeMeters();
   }
 });
 
 x32.onMessage((msg) => {
   const parsed = parseAddress(msg.address);
-  const selectedBus = useMixerStore.getState().selectedBus;
+  const { selectedBus, mainSelected } = useMixerStore.getState();
 
   switch (parsed.kind) {
     case 'channelName': {
@@ -341,20 +456,52 @@ x32.onMessage((msg) => {
     }
     case 'sendLevel': {
       const v = firstNumber(msg);
-      if (parsed.channel && parsed.bus === selectedBus && v !== undefined)
+      if (!mainSelected && parsed.channel && parsed.bus === selectedBus && v !== undefined)
         updateChannel(parsed.channel, { level: v });
       break;
     }
     case 'sendPan': {
       const v = firstNumber(msg);
-      if (parsed.channel && parsed.bus === selectedBus && v !== undefined)
+      if (!mainSelected && parsed.channel && parsed.bus === selectedBus && v !== undefined)
         updateChannel(parsed.channel, { pan: v });
       break;
     }
     case 'sendOn': {
       const v = firstNumber(msg);
-      if (parsed.channel && parsed.bus === selectedBus && v !== undefined)
+      if (!mainSelected && parsed.channel && parsed.bus === selectedBus && v !== undefined)
         updateChannel(parsed.channel, { on: v === 1 });
+      break;
+    }
+    // Main LR (admin): fader/mute PRINCIPAL do canal chegam por esses endereços.
+    case 'channelFader': {
+      const v = firstNumber(msg);
+      if (mainSelected && parsed.channel && v !== undefined) updateChannel(parsed.channel, { level: v });
+      break;
+    }
+    case 'channelOn': {
+      const v = firstNumber(msg);
+      if (mainSelected && parsed.channel && v !== undefined) updateChannel(parsed.channel, { on: v === 1 });
+      break;
+    }
+    case 'mainFader': {
+      const v = firstNumber(msg);
+      if (mainSelected && v !== undefined) useMixerStore.setState({ master: v });
+      break;
+    }
+    case 'mainOn': {
+      const v = firstNumber(msg);
+      if (mainSelected && v !== undefined) useMixerStore.setState({ masterOn: v === 1 });
+      break;
+    }
+    case 'mainName': {
+      const name = firstString(msg);
+      if (name !== undefined)
+        useMixerStore.setState((s) => ({ main: { ...s.main, name: name.trim() || 'Main LR' } }));
+      break;
+    }
+    case 'mainColor': {
+      const color = firstNumber(msg);
+      if (color !== undefined) useMixerStore.setState((s) => ({ main: { ...s.main, color } }));
       break;
     }
     case 'busName': {
@@ -365,9 +512,22 @@ x32.onMessage((msg) => {
         }));
       break;
     }
+    case 'busColor': {
+      const color = firstNumber(msg);
+      if (parsed.bus && color !== undefined)
+        useMixerStore.setState((s) => ({
+          buses: s.buses.map((b) => (b.index === parsed.bus ? { ...b, color } : b)),
+        }));
+      break;
+    }
     case 'busFader': {
       const v = firstNumber(msg);
       if (parsed.bus === selectedBus && v !== undefined) useMixerStore.setState({ master: v });
+      break;
+    }
+    case 'busOn': {
+      const v = firstNumber(msg);
+      if (parsed.bus === selectedBus && v !== undefined) useMixerStore.setState({ masterOn: v === 1 });
       break;
     }
     default:
@@ -375,25 +535,13 @@ x32.onMessage((msg) => {
   }
 });
 
-// Balística do VU (a mesa manda só o nível instantâneo a ~20 Hz; o app oficial
-// suaviza). Subida imediata; descida lenta; pico segurado e caindo bem devagar.
-const METER_RELEASE = 0.80; // fator de decaimento do nível por frame
-const PEAK_RELEASE = 0.965; // decaimento do peak-hold por frame (segura ~1s)
-
-function applyBallistics(prev: number, raw: number, release: number): number {
-  return raw >= prev ? raw : prev * release;
-}
-
 x32.onMeter((levels) => {
+  if (metersPaused) return; // sheet aberto: não atualiza o VU (evita loop de render)
   useMixerStore.setState((s) => ({
     channels: s.channels.map((c) => {
       if (c.index > levels.length) return c;
       const raw = levels[c.index - 1] ?? 0;
-      return {
-        ...c,
-        meter: applyBallistics(c.meter, raw, METER_RELEASE),
-        peak: applyBallistics(c.peak, raw, PEAK_RELEASE),
-      };
+      return { ...c, meter: applyBallistics(c.meter, raw) };
     }),
   }));
 });

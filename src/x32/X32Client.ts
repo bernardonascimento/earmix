@@ -246,6 +246,45 @@ export class X32Client {
     this.send(X32.busFader(bus), [{ type: 'f', value: clamp01(value) }]);
   }
 
+  /** Liga/desliga o bus de retorno inteiro (mute do próprio fone). */
+  setBusOn(bus: number, on: boolean) {
+    this.send(X32.busOn(bus), [{ type: 'i', value: on ? 1 : 0 }]);
+  }
+
+  // ---------- Main LR (mix da PA — só admin) ----------
+
+  /** Fader PRINCIPAL do canal (o que vai para o Main LR / PA). */
+  setChannelFader(ch: number, value: number) {
+    this.send(X32.channelFader(ch), [{ type: 'f', value: clamp01(value) }]);
+  }
+
+  /** Mute PRINCIPAL do canal (afeta a PA). 1 = aberto, 0 = mutado. */
+  setChannelOn(ch: number, on: boolean) {
+    this.send(X32.channelOn(ch), [{ type: 'i', value: on ? 1 : 0 }]);
+  }
+
+  /** Volume do Main LR (PA). */
+  setMainFader(value: number) {
+    this.send(X32.mainFader(), [{ type: 'f', value: clamp01(value) }]);
+  }
+
+  /** Liga/desliga o Main LR (mute da PA). */
+  setMainOn(on: boolean) {
+    this.send(X32.mainOn(), [{ type: 'i', value: on ? 1 : 0 }]);
+  }
+
+  /** Pede fader/mute principal de todos os canais + nome/cor/fader/on do Main LR. */
+  requestMainSends() {
+    this.send(X32.mainFader());
+    this.send(X32.mainOn());
+    this.send(X32.mainName());
+    this.send(X32.mainColor());
+    for (let ch = 1; ch <= CHANNEL_COUNT; ch++) {
+      this.send(X32.channelFader(ch));
+      this.send(X32.channelOn(ch));
+    }
+  }
+
   // ---------- leitura de estado ----------
 
   /** Pede nome e cor de todos os canais (popula a UI ao conectar). */
@@ -256,16 +295,18 @@ export class X32Client {
     }
   }
 
-  /** Pede os nomes de todos os buses (para o seletor de retorno). */
+  /** Pede nome e cor de todos os buses (para o seletor de retorno). */
   requestBusNames() {
     for (let bus = 1; bus <= BUS_COUNT; bus++) {
       this.send(X32.busName(bus));
+      this.send(X32.busColor(bus));
     }
   }
 
   /** Pede os sends (level/pan/on) de todos os canais + o master do bus selecionado. */
   requestBusSends(bus: number) {
     this.send(X32.busFader(bus)); // volume master do retorno
+    this.send(X32.busOn(bus)); // on/off do retorno (mute do próprio fone)
     for (let ch = 1; ch <= CHANNEL_COUNT; ch++) {
       this.send(X32.sendLevel(ch, bus));
       this.send(X32.sendPan(ch, bus));

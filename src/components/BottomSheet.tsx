@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useRef } from 'react';
-import { Text, StyleSheet } from 'react-native';
+import { Text, StyleSheet, useWindowDimensions } from 'react-native';
 import {
   BottomSheetModal,
   BottomSheetView,
   BottomSheetScrollView,
   BottomSheetBackdrop,
 } from '@gorhom/bottom-sheet';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { theme, space, radius, font, family } from '../theme';
 
 interface Props {
@@ -24,27 +25,45 @@ interface Props {
  */
 export function BottomSheet({ visible, onClose, title, scrollable, children }: Props) {
   const ref = useRef<BottomSheetModal>(null);
-  const presented = useRef(false);
+  // isOpenRef = estado REAL do sheet (via onChange). wantVisible = o que o pai quer.
+  // Só chamamos present()/dismiss() quando há DIVERGÊNCIA real — nunca um dismiss()
+  // redundante (que corrompia a pilha do gorhom quando o modal já fechou pelo backdrop,
+  // fazendo os modais pararem de abrir depois de alguns abre/fecha).
+  const isOpenRef = useRef(false);
+  const wantVisible = useRef(false);
+  // onClose vem como arrow nova a cada render do pai; o Mixer re-renderiza ~20x/s (VU).
+  // Guardamos numa ref para os callbacks do gorhom (onChange/onDismiss) terem identidade
+  // ESTÁVEL — senão o sheet re-configura em loop durante a medição e estoura o render
+  // ("Maximum update depth"). É por isso que só o bus picker crashava.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
-    if (visible) {
-      ref.current?.present();
-      presented.current = true;
-    } else if (presented.current) {
-      // Só descarta se já tinha sido aberto — chamar dismiss() antes do primeiro
-      // present() deixa o modal num estado que ignora aberturas futuras.
-      ref.current?.dismiss();
-      presented.current = false;
-    }
+    wantVisible.current = visible;
+    if (visible && !isOpenRef.current) ref.current?.present();
+    else if (!visible && isOpenRef.current) ref.current?.dismiss();
   }, [visible]);
 
-  // Quando o gorhom fecha sozinho (arraste/toque fora), zera `presented` ANTES de
-  // avisar o pai — assim o efeito de `visible=false` não chama um dismiss() redundante
-  // (que quebraria o próximo present()).
+  const handleChange = useCallback((index: number) => {
+    const wasOpen = isOpenRef.current;
+    isOpenRef.current = index >= 0;
+    // Só sincroniza o pai na TRANSIÇÃO aberto→fechado — não a cada onChange. O gorhom
+    // dispara onChange várias vezes durante a medição; chamar onClose() (setState) em
+    // todas causava loop de re-render ("Maximum update depth"). wasOpen corta o loop.
+    if (wasOpen && index < 0 && wantVisible.current) {
+      wantVisible.current = false;
+      onCloseRef.current();
+    }
+  }, []);
+
+  // Rede de segurança ao desmontar: estado fechado e pai coerente.
   const handleDismiss = useCallback(() => {
-    presented.current = false;
-    onClose();
-  }, [onClose]);
+    isOpenRef.current = false;
+    if (wantVisible.current) {
+      wantVisible.current = false;
+      onCloseRef.current();
+    }
+  }, []);
 
   const renderBackdrop = useCallback(
     (props: React.ComponentProps<typeof BottomSheetBackdrop>) => (
@@ -55,22 +74,32 @@ export function BottomSheet({ visible, onClose, title, scrollable, children }: P
 
   const header = title ? <Text style={styles.title}>{title}</Text> : null;
 
+  // Dinâmico até no máximo 85% da tela; acima disso o BottomSheetScrollView rola. (O
+  // crash "Maximum update depth" era do VU a 20 Hz — resolvido pausando o metering com
+  // o sheet aberto — não deste limite, que pode voltar.)
+  const { height } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  // Padding inferior + safe area (barra de navegação do Android cortava o último item).
+  const contentStyle = [styles.content, { paddingBottom: space.xxl + insets.bottom }];
+
   return (
     <BottomSheetModal
       ref={ref}
       enablePanDownToClose
+      maxDynamicContentSize={height * 0.85}
       backdropComponent={renderBackdrop}
       backgroundStyle={styles.background}
       handleIndicatorStyle={styles.handle}
+      onChange={handleChange}
       onDismiss={handleDismiss}
     >
       {scrollable ? (
-        <BottomSheetScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <BottomSheetScrollView contentContainerStyle={contentStyle} showsVerticalScrollIndicator={false}>
           {header}
           {children}
         </BottomSheetScrollView>
       ) : (
-        <BottomSheetView style={styles.content}>
+        <BottomSheetView style={contentStyle}>
           {header}
           {children}
         </BottomSheetView>
@@ -88,6 +117,6 @@ const styles = StyleSheet.create({
     borderColor: theme.border,
   },
   handle: { backgroundColor: theme.border, width: 44, height: 5 },
-  content: { paddingHorizontal: space.xl, paddingBottom: space.xxl },
+  content: { paddingHorizontal: space.xl },
   title: { color: theme.text, fontSize: font.heading, fontFamily: family.display, marginBottom: space.md },
 });

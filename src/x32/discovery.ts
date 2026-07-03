@@ -58,6 +58,12 @@ export function subnetBroadcast(ip: string | null | undefined): string | null {
   return `${m[1]}.${m[2]}.${m[3]}.255`;
 }
 
+/** Prefixo /24 de um IPv4 ("192.168.1.34" -> "192.168.1"), ou null. */
+export function prefix24(ip: string | null | undefined): string | null {
+  const m = ip ? /^(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}$/.exec(ip) : null;
+  return m ? m[1] : null;
+}
+
 /** Alvos de broadcast a tentar: o /24 derivado do IP local + o global. */
 export function broadcastTargets(localIp: string | null | undefined): string[] {
   const targets = new Set<string>(['255.255.255.255']);
@@ -67,16 +73,23 @@ export function broadcastTargets(localIp: string | null | undefined): string[] {
 }
 
 /**
- * IPs da sub-rede /24 para varredura UNICAST (ex.: 192.168.0.1 .. .254, menos o
- * próprio). Unicast funciona no iPhone físico — o broadcast é bloqueado pelo iOS
- * sem a entitlement de multicast. Retorna [] se o IP local não for IPv4 válido.
+ * IPs da sub-rede /24 para varredura UNICAST (ex.: 192.168.0.1 .. .254). A /24 vem de
+ * `baseIp`; `selfIp` (default = baseIp) é excluído quando está na mesma /24 (não faz
+ * sentido varrer o próprio aparelho). Passar selfIp separado permite derivar a /24 de
+ * um IP conhecido (ex.: o da mesa) mesmo sem saber o IP local — caso do iPad, onde o
+ * getIpAddressAsync às vezes não retorna. Unicast funciona no device sem entitlement.
+ * Retorna [] se `baseIp` não for IPv4 válido.
  */
-export function sweepTargets(localIp: string | null | undefined): string[] {
-  if (!localIp) return [];
-  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(localIp);
+export function sweepTargets(
+  baseIp: string | null | undefined,
+  selfIp: string | null | undefined = baseIp,
+): string[] {
+  const m = baseIp ? /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(baseIp) : null;
   if (!m) return [];
   const prefix = `${m[1]}.${m[2]}.${m[3]}.`;
-  const self = parseInt(m[4], 10);
+  let self = -1;
+  const sm = selfIp ? /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(selfIp) : null;
+  if (sm && `${sm[1]}.${sm[2]}.${sm[3]}.` === prefix) self = parseInt(sm[4], 10);
   const out: string[] = [];
   for (let host = 1; host <= 254; host++) {
     if (host !== self) out.push(prefix + host);

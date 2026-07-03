@@ -41,8 +41,22 @@ export const X32 = {
   // ----- Buses (retornos) -----
   /** Nome do bus (string). */
   busName: (bus: number) => `/bus/${pad2(bus)}/config/name`,
+  /** Cor do bus (int 0-15) — mesma paleta dos canais. */
+  busColor: (bus: number) => `/bus/${pad2(bus)}/config/color`,
   /** Fader master do bus (volume geral daquele retorno/fone). Float 0.0–1.0. */
   busFader: (bus: number) => `/bus/${pad2(bus)}/mix/fader`,
+  /** Liga/desliga o bus inteiro (1 = ativo, 0 = mutado). Muta só ESTE retorno/fone. */
+  busOn: (bus: number) => `/bus/${pad2(bus)}/mix/on`,
+
+  // ----- Main LR (mistura da casa / PA — só admin) -----
+  /** Fader master do Main LR (volume da PA). Float 0.0–1.0. */
+  mainFader: () => '/main/st/mix/fader',
+  /** Liga/desliga o Main LR inteiro (mute da PA). */
+  mainOn: () => '/main/st/mix/on',
+  /** Nome do Main LR. */
+  mainName: () => '/main/st/config/name',
+  /** Cor do Main LR. */
+  mainColor: () => '/main/st/config/color',
 } as const;
 
 /** Regex para extrair o número do canal de um endereço /ch/NN/... */
@@ -51,11 +65,20 @@ const CH_RE = /^\/ch\/(\d{2})\//;
 const SEND_RE = /^\/ch\/(\d{2})\/mix\/(\d{2})\/(level|pan|on)$/;
 /** Regex para o nome do bus. */
 const BUS_NAME_RE = /^\/bus\/(\d{2})\/config\/name$/;
+/** Regex para a cor do bus. */
+const BUS_COLOR_RE = /^\/bus\/(\d{2})\/config\/color$/;
 /** Regex para o fader master do bus. */
 const BUS_FADER_RE = /^\/bus\/(\d{2})\/mix\/fader$/;
+/** Regex para o on/off do bus. */
+const BUS_ON_RE = /^\/bus\/(\d{2})\/mix\/on$/;
+/** Regex do Main LR. */
+const MAIN_FADER_RE = /^\/main\/st\/mix\/fader$/;
+const MAIN_ON_RE = /^\/main\/st\/mix\/on$/;
+const MAIN_NAME_RE = /^\/main\/st\/config\/name$/;
+const MAIN_COLOR_RE = /^\/main\/st\/config\/color$/;
 
 export interface ParsedAddress {
-  kind: 'channelOn' | 'channelFader' | 'channelName' | 'channelColor' | 'sendLevel' | 'sendPan' | 'sendOn' | 'busName' | 'busFader' | 'unknown';
+  kind: 'channelOn' | 'channelFader' | 'channelName' | 'channelColor' | 'sendLevel' | 'sendPan' | 'sendOn' | 'busName' | 'busColor' | 'busFader' | 'busOn' | 'mainFader' | 'mainOn' | 'mainName' | 'mainColor' | 'unknown';
   channel?: number;
   bus?: number;
 }
@@ -73,8 +96,19 @@ export function parseAddress(address: string): ParsedAddress {
   const busName = BUS_NAME_RE.exec(address);
   if (busName) return { kind: 'busName', bus: parseInt(busName[1], 10) };
 
+  const busColor = BUS_COLOR_RE.exec(address);
+  if (busColor) return { kind: 'busColor', bus: parseInt(busColor[1], 10) };
+
   const busFader = BUS_FADER_RE.exec(address);
   if (busFader) return { kind: 'busFader', bus: parseInt(busFader[1], 10) };
+
+  const busOn = BUS_ON_RE.exec(address);
+  if (busOn) return { kind: 'busOn', bus: parseInt(busOn[1], 10) };
+
+  if (MAIN_FADER_RE.test(address)) return { kind: 'mainFader' };
+  if (MAIN_ON_RE.test(address)) return { kind: 'mainOn' };
+  if (MAIN_NAME_RE.test(address)) return { kind: 'mainName' };
+  if (MAIN_COLOR_RE.test(address)) return { kind: 'mainColor' };
 
   const ch = CH_RE.exec(address);
   if (ch) {

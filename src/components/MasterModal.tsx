@@ -1,9 +1,9 @@
 import React from 'react';
-import { Text, Pressable, StyleSheet } from 'react-native';
 import { useMixerStore } from '../store/useMixerStore';
 import { BottomSheet } from './BottomSheet';
 import { LevelControl } from './LevelControl';
-import { theme, space, radius, font } from '../theme';
+import { ModalActions } from './ModalActions';
+import { theme } from '../theme';
 
 interface Props {
   visible: boolean;
@@ -12,32 +12,22 @@ interface Props {
 
 /**
  * Volume master do retorno atual — ajustado raramente, por isso fica num bottom
- * sheet discreto acionado por um botão pequeno no cabeçalho.
+ * sheet discreto acionado por um botão pequeno no cabeçalho. Traz também o mute do
+ * bus inteiro (silencia o próprio fone, sem afetar a PA).
  */
-export function MasterModal({ visible, onClose }: Props) {
+export const MasterModal = React.memo(function MasterModal({ visible, onClose }: Props) {
   const master = useMixerStore((s) => s.master);
   const setMaster = useMixerStore((s) => s.setMaster);
+  const masterOn = useMixerStore((s) => s.masterOn);
+  const toggleMasterMute = useMixerStore((s) => s.toggleMasterMute);
   const buses = useMixerStore((s) => s.buses);
   const selectedBus = useMixerStore((s) => s.selectedBus);
   const busName = buses[selectedBus - 1]?.name ?? `Bus ${selectedBus}`;
 
   return (
     <BottomSheet visible={visible} onClose={onClose} title={`Volume geral · ${busName}`}>
-      <LevelControl value={master} onChange={setMaster} />
-      <Pressable style={styles.done} onPress={onClose}>
-        <Text style={styles.doneText}>Pronto</Text>
-      </Pressable>
+      <LevelControl value={master} onChange={setMaster} color={masterOn ? theme.accent : theme.danger} />
+      <ModalActions on={masterOn} onToggleMute={toggleMasterMute} onDone={onClose} muteLabel="Mutar fone" />
     </BottomSheet>
   );
-}
-
-const styles = StyleSheet.create({
-  done: {
-    marginTop: space.xl,
-    alignItems: 'center',
-    paddingVertical: space.lg,
-    borderRadius: radius.md,
-    backgroundColor: theme.accent,
-  },
-  doneText: { color: '#03210F', fontWeight: '700', fontSize: font.body },
 });

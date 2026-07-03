@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, Pressable, ActivityIndicator, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useKeepAwake } from 'expo-keep-awake';
+import { useBottomSheetModal } from '@gorhom/bottom-sheet';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useMixerStore } from '../store/useMixerStore';
 import { ChannelStrip } from '../components/ChannelStrip';
@@ -10,7 +11,7 @@ import { BusPickerModal } from '../components/BusPickerModal';
 import { MasterModal } from '../components/MasterModal';
 import { ChannelModal } from '../components/ChannelModal';
 import { formatFaderDb } from '../osc/faderLaw';
-import { theme, space, radius, font, family } from '../theme';
+import { theme, space, radius, font, family, channelColor } from '../theme';
 import { RootStackParamList } from '../navigation';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Mixer'>;
@@ -27,6 +28,7 @@ const GIVEUP_MS = 15000;
 
 export function MixerScreen({ navigation }: Props) {
   useKeepAwake(); // não deixa a tela apagar durante o show
+  const { dismissAll } = useBottomSheetModal();
 
   const channels = useMixerStore((s) => s.channels);
   const status = useMixerStore((s) => s.status);
@@ -35,6 +37,9 @@ export function MixerScreen({ navigation }: Props) {
   const selectedBus = useMixerStore((s) => s.selectedBus);
   const master = useMixerStore((s) => s.master);
   const disconnect = useMixerStore((s) => s.disconnect);
+  const mainSelected = useMixerStore((s) => s.mainSelected);
+  const main = useMixerStore((s) => s.main);
+  const pauseMeters = useMixerStore((s) => s.pauseMeters);
 
   const [busPickerOpen, setBusPickerOpen] = useState(false);
   const [masterOpen, setMasterOpen] = useState(false);
@@ -45,14 +50,45 @@ export function MixerScreen({ navigation }: Props) {
   const isTablet = Math.min(width, height) >= 600;
   const compact = width > height && !isTablet;
 
-  const busName = buses[selectedBus - 1]?.name ?? `Bus ${selectedBus}`;
+  const busName = mainSelected
+    ? main.name || 'Main LR'
+    : buses[selectedBus - 1]?.name ?? `Bus ${selectedBus}`;
+  const kindLabel = mainSelected ? 'Mix da casa · PA' : 'Mix de fone';
   const stateLabel = demoMode ? 'modo demo' : status === 'connected' ? 'ao vivo' : status;
+  // O ponto usa a cor do bus/Main (vinda da mesa) quando tudo ok; se caiu a conexão,
+  // mostra a cor de status (a reconexão também é sinalizada pelo overlay).
+  const live = demoMode || status === 'connected';
+  const activeColor = mainSelected ? main.color : buses[selectedBus - 1]?.color ?? 0;
+  const dotColor = live ? channelColor(activeColor) : STATUS_COLOR[status];
 
-  const onExit = () => {
+  // Handlers ESTÁVEIS: o Mixer re-renderiza ~20x/s pelo VU; sem isso os modais (e o
+  // bottom sheet) re-renderizariam junto e podiam entrar em loop de medição.
+  const onExit = useCallback(() => {
+    // Ordem importa: fecha os sheets, para o metering (disconnect) e SÓ então navega,
+    // resetando o stack para desmontar o Mixer por completo. Sair com um sheet aberto
+    // + o VU a 20Hz deixava o provider do gorhom sujo e crashava ao voltar (loop).
+    dismissAll();
     setBusPickerOpen(false);
+    setMasterOpen(false);
+    setChannelOpen(null);
     disconnect();
-    navigation.navigate('Connect');
-  };
+    navigation.reset({ index: 0, routes: [{ name: 'Connect' }] });
+  }, [dismissAll, disconnect, navigation]);
+
+  // Ao desmontar o Mixer (por qualquer caminho), garante que nenhum sheet fique
+  // pendurado no provider global do gorhom.
+  useEffect(() => () => dismissAll(), [dismissAll]);
+
+  // Pausa o VU enquanto qualquer modal está aberto (evita o loop de re-render que
+  // crashava ao abrir sheets com o metering a 20 Hz).
+  const anyModalOpen = busPickerOpen || masterOpen || channelOpen !== null;
+  useEffect(() => {
+    pauseMeters(anyModalOpen);
+    return () => pauseMeters(false);
+  }, [anyModalOpen, pauseMeters]);
+  const closeBusPicker = useCallback(() => setBusPickerOpen(false), []);
+  const closeMaster = useCallback(() => setMasterOpen(false), []);
+  const closeChannel = useCallback(() => setChannelOpen(null), []);
 
   // Conexão real perdida: mostra overlay de reconexão e, se não voltar a tempo,
   // desiste e retorna para a tela inicial (o store.disconnect esquece a mesa).
@@ -72,14 +108,14 @@ export function MixerScreen({ navigation }: Props) {
         {/* Título = seletor de retorno (toque deliberado, evita troca acidental) */}
         <View style={styles.headerLeft}>
           <Pressable style={styles.busButton} onPress={() => setBusPickerOpen(true)} hitSlop={8}>
-            <View style={[styles.dot, { backgroundColor: STATUS_COLOR[status] }]} />
+            <View style={[styles.dot, { backgroundColor: dotColor }]} />
             <Text style={styles.busButtonText} numberOfLines={1}>
               {busName}
             </Text>
             <Ionicons name="chevron-down" size={18} color={theme.accent} style={styles.caret} />
           </Pressable>
           {/* Subtítulo ocupa altura — escondido no celular deitado */}
-          {!compact && <Text style={styles.subtitle}>Mix de fone · {stateLabel}</Text>}
+          {!compact && <Text style={styles.subtitle}>{kindLabel} · {stateLabel}</Text>}
         </View>
 
         <View style={styles.headerRight}>
@@ -105,9 +141,11 @@ export function MixerScreen({ navigation }: Props) {
         ))}
       </ScrollView>
 
-      <BusPickerModal visible={busPickerOpen} onClose={() => setBusPickerOpen(false)} onExit={onExit} />
-      <MasterModal visible={masterOpen} onClose={() => setMasterOpen(false)} />
-      <ChannelModal visible={channelOpen !== null} channelIndex={channelOpen} onClose={() => setChannelOpen(null)} />
+      {/* Permanentes: fecham via dismiss animado (limpo). Desmontá-los condicionalmente
+          enquanto apresentados sujava o provider do gorhom. */}
+      <BusPickerModal visible={busPickerOpen} onClose={closeBusPicker} onExit={onExit} />
+      <MasterModal visible={masterOpen} onClose={closeMaster} />
+      <ChannelModal visible={channelOpen !== null} channelIndex={channelOpen} onClose={closeChannel} />
 
       {reconnecting && (
         <View style={styles.overlay} pointerEvents="auto">
