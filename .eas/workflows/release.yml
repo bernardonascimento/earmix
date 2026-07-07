@@ -1,0 +1,59 @@
+# Release do EarMix — dispara ao publicar uma tag de versão.
+#   git tag v1.0.0
+#   git push origin v1.0.0
+#
+# Faz o build de produção (iOS + Android) e envia para as lojas.
+#
+# Pré-requisitos para rodar por completo:
+#   1. Conectar o repositório GitHub ao projeto EAS no dashboard
+#      (expo.dev → projeto earmix → Project settings → GitHub) e instalar o GitHub App.
+#   2. Credenciais no EAS:
+#        - iOS: conta Apple Developer paga (certificado de distribuição + provisioning
+#          são geridos pelo EAS no primeiro build de produção).
+#        - Android: keystore (o EAS gera automaticamente no primeiro build).
+#   3. Para os submits, preencher o perfil "production" em `submit` no eas.json:
+#        - iOS: App Store Connect API key (ou appleId + ascAppId + appleTeamId).
+#        - Android: serviceAccountKeyPath (JSON da service account) e track (ex.: "internal").
+#
+# Antes das contas liberarem, dá para rodar só o build Android manualmente, sem tag:
+#   eas workflow:run .eas/workflows/release.yml
+
+name: Release (build + submit por tag)
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build_ios:
+    name: Build iOS (produção)
+    type: build
+    params:
+      platform: ios
+      profile: production
+
+  build_android:
+    name: Build Android (produção)
+    type: build
+    params:
+      platform: android
+      profile: production
+
+  submit_ios:
+    name: Enviar para a App Store
+    needs: [build_ios]
+    type: submit
+    params:
+      platform: ios
+      profile: production
+      build_id: ${{ needs.build_ios.outputs.build_id }}
+
+  submit_android:
+    name: Enviar para o Google Play
+    needs: [build_android]
+    type: submit
+    params:
+      platform: android
+      profile: production
+      build_id: ${{ needs.build_android.outputs.build_id }}
