@@ -11,9 +11,11 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.bernardo.earmix",
+      "icon": "./assets/icon-ios.png",
       "infoPlist": {
         "NSLocalNetworkUsageDescription": "O EarMix usa a rede local para se conectar à sua mesa de som Behringer X32 / Midas M32 e controlar o mix de fone.",
-        "UIRequiresPersistentWiFi": true
+        "UIRequiresPersistentWiFi": true,
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -49,6 +51,12 @@
           }
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "0dd81715-41c3-443d-bdd7-1e10d832762d"
+      }
+    },
+    "owner": "bernardonascimento"
   }
 }

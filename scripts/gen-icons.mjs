@@ -129,6 +129,12 @@ for (const [s, size, out] of tasks) await render(s, size, out);
 // Ícones com a marca RECORTADA e centralizada (bordas iguais em cima/embaixo):
 // App icon iOS (fundo + marca ~72% da altura).
 await renderCentered(1024, 'icon.png', { bg: true, fraction: 0.72 });
+// Versão iOS SEM canal alpha — a App Store rejeita ícone com transparência.
+// O fundo já é opaco, então o flatten só remove o canal alpha (visual idêntico).
+await sharp(join(ASSETS, 'icon.png'))
+  .flatten({ background: BG_BOT })
+  .png()
+  .toFile(join(ASSETS, 'icon-ios.png'));
 await renderCentered(64, 'favicon.png', { bg: true, fraction: 0.72 });
 // Android adaptive foreground/monochrome (~66% = dentro da zona segura do adaptive icon).
 await renderCentered(1024, 'android-icon-foreground.png', { bg: false, fraction: 0.66 });
