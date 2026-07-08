@@ -1,0 +1,30 @@
+# Build Android do EarMix — gera o .aab de produção para subir no teste
+# interno / fechado do Google Play, SEM submit automático.
+#
+# Como disparar (dá push de uma tag android-*):
+#   git tag android-v1.0.0
+#   git push origin android-v1.0.0
+#
+# O build roda na nuvem do EAS sob a conta dona do projeto (a pessoal,
+# já vinculada ao GitHub) — não precisa estar logado na CLI local.
+#
+# Ao terminar, baixe o .aab em expo.dev → projeto earmix → Builds e faça
+# upload em "Criar uma nova versão" no Play Console.
+#
+# (O submit automático virá depois, quando a service account do Google
+# estiver configurada no perfil submit.production do eas.json.)
+
+name: Build Android (.aab)
+
+on:
+  push:
+    tags:
+      - 'android-*'
+
+jobs:
+  build_android:
+    name: Build Android (produção)
+    type: build
+    params:
+      platform: android
+      profile: production
