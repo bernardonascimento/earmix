@@ -7,22 +7,25 @@ interface Props {
   title?: string;
   message?: string;
   onCancel: () => void;
-  onSubmit: (password: string) => void;
+  onSubmit: (user: string, password: string) => void;
 }
 
 /**
- * Prompt de senha cross-platform (o Alert.prompt do RN é só iOS). Modal central
- * simples com campo protegido — usado para liberar o modo admin.
+ * Prompt de usuário + senha cross-platform (o Alert.prompt do RN só tem 1 campo).
+ * Modal central simples — usado para liberar o modo admin.
  */
 export function PasswordPrompt({ visible, title = 'Modo admin', message, onCancel, onSubmit }: Props) {
+  const [user, setUser] = useState('');
   const [value, setValue] = useState('');
+  const userRef = useRef<TextInput>(null);
   const inputRef = useRef<TextInput>(null);
   const { height } = useWindowDimensions();
 
   // Abre o teclado junto com o modal (autoFocus não funciona em Modal no Android).
   const handleShow = () => {
+    setUser('');
     setValue('');
-    setTimeout(() => inputRef.current?.focus(), 150);
+    setTimeout(() => userRef.current?.focus(), 150);
   };
 
   return (
@@ -44,6 +47,18 @@ export function PasswordPrompt({ visible, title = 'Modo admin', message, onCance
             <Text style={styles.title}>{title}</Text>
             {message ? <Text style={styles.message}>{message}</Text> : null}
             <TextInput
+              ref={userRef}
+              value={user}
+              onChangeText={setUser}
+              placeholder="Usuário"
+              placeholderTextColor={theme.textDim}
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={styles.input}
+              returnKeyType="next"
+              onSubmitEditing={() => inputRef.current?.focus()}
+            />
+            <TextInput
               ref={inputRef}
               value={value}
               onChangeText={setValue}
@@ -53,13 +68,13 @@ export function PasswordPrompt({ visible, title = 'Modo admin', message, onCance
               autoCapitalize="none"
               autoCorrect={false}
               style={styles.input}
-              onSubmitEditing={() => onSubmit(value)}
+              onSubmitEditing={() => onSubmit(user, value)}
             />
             <View style={styles.row}>
               <Pressable style={[styles.btn, styles.cancel]} onPress={onCancel}>
                 <Text style={styles.cancelText}>Cancelar</Text>
               </Pressable>
-              <Pressable style={[styles.btn, styles.ok]} onPress={() => onSubmit(value)}>
+              <Pressable style={[styles.btn, styles.ok]} onPress={() => onSubmit(user, value)}>
                 <Text style={styles.okText}>Entrar</Text>
               </Pressable>
             </View>

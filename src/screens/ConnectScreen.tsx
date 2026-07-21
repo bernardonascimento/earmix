@@ -27,9 +27,10 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Connect'>;
 
 const IP_RE = /^(\d{1,3}\.){3}\d{1,3}$/;
 /**
- * Senha do modo admin (libera o Main LR / PA). É um controle de acesso CASUAL — fica
- * no bundle, não é criptográfico. Troque aqui o valor conforme combinar com o time.
+ * Credenciais do modo admin (libera o Main LR / PA). É um controle de acesso CASUAL —
+ * fica no bundle, não é criptográfico. Troque aqui conforme combinar com o time.
  */
+const ADMIN_USER = 'admin';
 const ADMIN_PASSWORD = 'monitor@admin';
 
 export function ConnectScreen({ navigation }: Props) {
@@ -48,7 +49,7 @@ export function ConnectScreen({ navigation }: Props) {
   const { width } = useWindowDimensions();
   const sidePad = width >= 700 ? Math.min(width * 0.2, 240) : space.xl;
 
-  // iOS tem prompt nativo (Alert.prompt); Android não → usamos um modal próprio só nele.
+  // Modal próprio de usuário+senha (cross-platform — o Alert.prompt do RN só tem 1 campo).
   const [adminPrompt, setAdminPrompt] = useState(false);
   const onAdminTap = () => {
     if (isAdmin) {
@@ -58,25 +59,20 @@ export function ConnectScreen({ navigation }: Props) {
       ]);
       return;
     }
-    if (Platform.OS === 'ios') {
-      Alert.prompt(
-        'Modo admin',
-        'Digite a senha para liberar o Main LR (mix da casa).',
-        [
-          { text: 'Cancelar', style: 'cancel' },
-          { text: 'Entrar', onPress: (senha?: string) => onAdminSubmit(senha ?? '') },
-        ],
-        'secure-text',
-      );
-    } else {
-      setAdminPrompt(true);
-    }
+    setAdminPrompt(true);
   };
 
-  const onAdminSubmit = (senha: string) => {
+  const onAdminSubmit = (user: string, senha: string) => {
     setAdminPrompt(false);
-    if (senha === ADMIN_PASSWORD) setAdmin(true);
-    else Alert.alert('Senha incorreta');
+    if (user.trim() === ADMIN_USER && senha === ADMIN_PASSWORD) {
+      setAdmin(true);
+      Alert.alert(
+        'Modo admin ativado',
+        'Para usar o Main LR (mix da casa), acesse o Modo demo ou selecione uma mesa de som.',
+      );
+    } else {
+      Alert.alert('Credenciais incorretas');
+    }
   };
 
   // Há uma tentativa de conexão em andamento aguardando validação (handshake).
@@ -235,21 +231,21 @@ export function ConnectScreen({ navigation }: Props) {
         )}
 
           <View style={styles.bottomRow}>
-            <Pressable onPress={onDemo} style={[styles.bottomBtn, styles.bottomBtnDisabled]}>
-              <Ionicons name="headset-outline" size={18} color={theme.textFaint} />
-              <Text style={[styles.bottomBtnText, styles.bottomBtnTextDim]}>Modo demo</Text>
+            <Pressable onPress={onDemo} style={styles.bottomBtn}>
+              <Ionicons name="headset-outline" size={18} color={theme.text} />
+              <Text style={styles.bottomBtnText}>Modo demo</Text>
             </Pressable>
 
             <Pressable
               onPress={onAdminTap}
-              style={[styles.bottomBtn, isAdmin ? styles.adminBtnOn : styles.bottomBtnDisabled]}
+              style={[styles.bottomBtn, isAdmin && styles.adminBtnOn]}
             >
               <Ionicons
                 name={isAdmin ? 'lock-open' : 'lock-closed'}
                 size={18}
-                color={isAdmin ? theme.accent : theme.textFaint}
+                color={isAdmin ? theme.accent : theme.text}
               />
-              <Text style={[styles.bottomBtnText, isAdmin ? styles.adminBtnTextOn : styles.bottomBtnTextDim]}>
+              <Text style={[styles.bottomBtnText, isAdmin && styles.adminBtnTextOn]}>
                 {isAdmin ? 'Admin' : 'Modo admin'}
               </Text>
             </Pressable>
@@ -257,10 +253,10 @@ export function ConnectScreen({ navigation }: Props) {
         </ScrollView>
       </KeyboardAvoidingView>
 
-      {/* Prompt de senha do admin no Android (no iOS usamos o Alert.prompt nativo). */}
+      {/* Prompt de usuário + senha do modo admin (cross-platform). */}
       <PasswordPrompt
         visible={adminPrompt}
-        message="Digite a senha para liberar o Main LR (mix da casa)."
+        message="Entre com usuário e senha para liberar o Main LR (mix da casa)."
         onCancel={() => setAdminPrompt(false)}
         onSubmit={onAdminSubmit}
       />

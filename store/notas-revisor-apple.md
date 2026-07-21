@@ -1,73 +1,68 @@
 # EarMix — Notas para o revisor (App Store)
 
-Cole no App Store Connect em **App Review Information → Notes**.
-Recomendado usar a versão em INGLÊS (revisores internacionais). O app não tem
-login, então não é preciso preencher usuário/senha de conta — só as notas.
+Cole o bloco abaixo no App Store Connect em **App Review Information → Notes**.
+A Apple confirmou que pode responder no idioma de sua preferência, então usamos português.
+
+Campos relacionados (App Review Information):
+- **Sign-In required?** → **Não** (o app não exige cadastro/login para funcionar; o
+  "Modo admin" é um desbloqueio opcional).
+- **User Name / Password** (campos opcionais): para facilitar, preencha também com
+  `admin` / `monitor@admin` — são as credenciais do Modo admin descritas nas notas.
+- **Contact:** seu nome + e-mail (bernardonasciimento@gmail.com) + telefone.
+- **Notes:** cole o bloco abaixo.
 
 ---
 
-## EN (recomendado)
-
-```
-EarMix is a remote control for the personal monitor (in-ear/headphone) mix of
-Behringer X32 and Midas M32 audio mixing consoles. It talks to the console over
-the local Wi-Fi network using the OSC protocol (UDP, port 10023).
-
-HOW TO TEST WITHOUT A CONSOLE
-Since a physical mixing console is not available during review, please use DEMO
-MODE, which simulates a console with no hardware needed:
-
-1. On the first screen, at the bottom, tap "Modo demo" (Demo mode).
-2. The app opens a simulated mixer. You can adjust channel volumes, mute channels,
-   switch monitor buses ("retornos") and save/recall presets.
-
-RESTRICTED FEATURE — ADMIN MODE (please enable BEFORE entering demo mode):
-The "Main LR" control (the house/PA master) is hidden by default and only appears
-in admin mode. To test it:
-1. On the first screen, at the bottom, tap "Modo admin" (Admin mode, lock icon).
-2. Enter the password: monitor@admin
-3. Tap "Entrar". The button turns into "Admin" and the Main LR control becomes
-   available. Then enter Demo mode as above.
-
-LOCAL NETWORK PERMISSION
-iOS will ask for Local Network access. It is used ONLY to discover and control the
-X32/M32 console on the same Wi-Fi. The app has no accounts, collects no data, and
-sends nothing to any server — all communication stays between the phone and the
-console on the local network.
-
-The app UI is in Portuguese (primary market: Brazil).
-```
-
----
-
-## PT (caso prefira)
+## Texto para colar (PT)
 
 ```
 O EarMix é um controle remoto para o mix de retorno (fone/in-ear) das mesas de som
 Behringer X32 e Midas M32. Ele se comunica com a mesa pela rede Wi-Fi local, via
 protocolo OSC (UDP, porta 10023).
 
-COMO TESTAR SEM UMA MESA
-Como não há uma mesa física disponível na revisão, use o MODO DEMO, que simula uma
-mesa sem precisar de hardware:
-1. Na primeira tela, no rodapé, toque em "Modo demo".
-2. O app abre um mixer simulado: ajuste volumes, use mute, troque de retorno e
-   salve/recupere presets.
+VÍDEO DE DEMONSTRAÇÃO
+Vídeo mostrando o app rodando em um iPad físico (iPad 9ª geração, iPadOS 26.5), a
+conexão inicial com a mesa Behringer X32 e o fluxo completo de uso com o hardware:
+https://www.youtube.com/shorts/PpHi5ieFyvI
 
-FUNCIONALIDADE RESTRITA — MODO ADMIN (ative ANTES de entrar no demo):
-O controle "Main LR" (som da casa/PA) fica oculto e só aparece no modo admin.
-1. Na primeira tela, no rodapé, toque em "Modo admin" (ícone de cadeado).
-2. Digite a senha: monitor@admin
-3. Toque em "Entrar" — o Main LR passa a ficar disponível. Depois entre no Modo demo.
+COMO TESTAR SEM UMA MESA FÍSICA
+Como não há uma mesa X32/M32 disponível durante a revisão, o app tem um MODO DEMO
+embutido, que simula um console completo (32 canais e 16 retornos), sem nenhum
+hardware. Para verificar TODAS as funcionalidades, siga os passos abaixo NESTA ORDEM:
+
+PASSO 1 — Desbloquear o Modo admin (libera o controle "Main LR")
+O controle "Main LR" (mix da casa/PA) fica oculto por padrão e só aparece após entrar
+no Modo admin.
+1. Na primeira tela (tela de conexão), no rodapé, toque em "Modo admin" (ícone de
+   cadeado, botão à direita).
+2. No formulário, informe:
+      Usuário: admin
+      Senha:   monitor@admin
+3. Toque em "Entrar". As credenciais serão validadas e aparecerá a mensagem:
+   "Modo admin ativado — acesse o Modo demo ou selecione uma mesa de som." O botão
+   passa a exibir "Admin".
+
+PASSO 2 — Entrar no Modo demo
+1. Ainda na primeira tela, no rodapé, toque em "Modo demo" (ícone de fone, botão à
+   esquerda).
+2. O app abre um mixer simulado, já com o Modo admin ativo.
+
+PASSO 3 — Verificar as funcionalidades (no mixer)
+- Ajustar o volume de cada canal (faders).
+- Silenciar/reativar canais (mute).
+- Trocar de retorno / "bus" de fone (cada músico tem o próprio mix).
+- Abrir e usar o controle "Main LR" (mix da casa) — visível por causa do PASSO 1.
+- Salvar e recuperar presets.
+Isso cobre todo o fluxo do app, sem necessidade de hardware.
 
 PERMISSÃO DE REDE LOCAL
-É usada apenas para encontrar e controlar a mesa X32/M32 na mesma Wi-Fi. O app não
-tem contas, não coleta dados e não envia nada para servidores.
+O iOS pede acesso à Rede Local. É usado APENAS para descobrir e controlar a mesa
+X32/M32 na mesma rede Wi-Fi. O app não tem contas de usuário, não coleta dados
+pessoais e não envia nada para nenhum servidor — toda a comunicação fica entre o
+dispositivo e a mesa, na rede local.
+
+OBSERVAÇÕES
+- A interface do app está em português (mercado principal: Brasil).
+- O Modo admin é apenas um desbloqueio local de uma funcionalidade avançada (Main LR);
+  o app não exige login para uso normal.
 ```
-
----
-
-## Campos relacionados (App Review Information)
-- **Sign-in required?** → No (o app não tem login).
-- **Contact:** seu nome + e-mail (bernardonasciimento@gmail.com) + telefone.
-- **Notes:** cole o bloco EN acima.
