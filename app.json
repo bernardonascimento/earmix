@@ -15,7 +15,9 @@
       "infoPlist": {
         "NSLocalNetworkUsageDescription": "O EarMix usa a rede local para se conectar à sua mesa de som Behringer X32 / Midas M32 e controlar o mix de fone.",
         "UIRequiresPersistentWiFi": true,
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "CFBundleDevelopmentRegion": "pt-BR",
+        "CFBundleLocalizations": ["pt-BR"]
       }
     },
     "android": {
